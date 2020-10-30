@@ -1,0 +1,93 @@
+rm(list=ls())
+load("100 simulated00 data.RData")
+load("100 simulated05 data.RData")
+load("100 simulated50 data.RData")
+load("100 simulated55 data.RData")
+load("effect_suffi55_res_summary.RData")
+dataIndex = 100
+library(parallel)
+library(lme4)
+library(survival)
+library(hier.part)
+
+func_naiv = function(simdata,dataid){
+  data = simdata[[dataid]][[3]]  
+  effec_naiv = mean(data$A*data$y_obs-(1-data$A)*data$y_obs)
+  return (effec_naiv=effec_naiv)
+}
+effect_naic_summ00 = mclapply(1:dataIndex,func_naiv,simdata=simdata00,mc.cores = 1)
+effect_naic_summ05 = mclapply(1:dataIndex,func_naiv,simdata=simdata05,mc.cores = 1)
+effect_naic_summ50 = mclapply(1:dataIndex,func_naiv,simdata=simdata50,mc.cores = 1)
+effect_naic_summ55 = mclapply(1:dataIndex,func_naiv,simdata=simdata55,mc.cores = 1)
+save(effect_naic_summ00,file="effect_naiv00_res_summary.RData")
+save(effect_naic_summ05,file="effect_naiv05_res_summary.RData")
+save(effect_naic_summ50,file="effect_naiv50_res_summary.RData")
+save(effect_naic_summ55,file="effect_naiv55_res_summary.RData")
+
+func_ran = function(simdata,dataid){
+  data = simdata[[dataid]][[3]]
+  control=glmerControl(check.conv.singular = .makeCC(action = "ignore",  tol = 1e-4))
+  logran = glmer(A ~ x1 + x2+ (1|clu),data=data,family=binomial,control=control)
+  beta_ran = summary(logran)$coefficients[,1]
+  m_ran = beta_ran[1]+data$x1*beta_ran[2]+data$x2*beta_ran[3]
+  w_ran = exp(m_ran)/(1+exp(m_ran))
+  mean(data$A*data$y_obs/w_ran-(1-data$A)*data$y_obs/(1-w_ran))
+  data$w_ran = w_ran
+  effec_ran = mean(data$A*data$y_obs/data$w_ran-(1-data$A)*data$y_obs/(1-data$w_ran))
+  print(dataid)
+  return (effec_ran = effec_ran)
+}
+effect_ran_summ = mclapply(1:dataIndex,func_ran,simdata=simdata00,mc.cores = 1)
+effect_ran_summ05 = mclapply(1:dataIndex,func_ran,simdata=simdata05,mc.cores = 1)
+effect_ran_summ50 = mclapply(1:dataIndex,func_ran,simdata=simdata50,mc.cores = 1)
+effect_ran_summ55 = mclapply(1:dataIndex,func_ran,simdata=simdata55,mc.cores = 1)
+save(effect_ran_summ,file="effect_ran00_res_summary.RData")
+save(effect_ran_summ05,file="effect_ran05_res_summary.RData")
+save(effect_ran_summ50,file="effect_ran50_res_summary.RData")
+save(effect_ran_summ55,file="effect_ran55_res_summary.RData")
+
+func_fix = function(simdata,dataid){
+  data = simdata[[dataid]][[3]]
+  logfix = glm(A~x1+x2+factor(clu),family = binomial(link = "logit"),data=data)
+  data$w_fix = predict(logfix,type="response")
+  effec_fix = mean(data$A*data$y_obs/data$w_fix-(1-data$A)*data$y_obs/(1-data$w_fix))
+  print(dataid)
+  return (effec_fix=effec_fix)
+}
+effect_fix_summ = mclapply(1:dataIndex,func_fix,simdata=simdata00,mc.cores = 1)
+save(effect_fix_summ,file="effect_fix_res_summary.RData")
+
+func_suffi = function(simdata,dataid,m=500){
+  data = simdata[[dataid]][[3]]
+  n = simdata[[dataid]][[1]]
+  suff_T = simdata[[dataid]][[2]]
+  clog_summ = clogit(A~x1+x2+strata(clu), data=data)
+  beta_mle = clog_summ$coefficients
+  ####### construct Vij
+  beta_est=beta_mle
+  prop_ps = 0
+  for (i in 1:m){
+    for (j in 1:n[i]){
+      astar = rbind(rep(0,n[i]),combos(n[i])$binary) ## all combinations of treatment
+      astarj = astar[astar[,j]==data[data$clu==i,]$A[j],] ## jth component is equal to the observed
+      sumrow = rowSums(astarj)
+      ind = which(sumrow==suff_T[i])
+      astar_f = matrix(astarj[ind,],ncol=n[i]) ## and only keep rowsum equal to sufficient statistics 
+      nume = exp(data[data$clu==i,]$A[j]*as.matrix(data[data$clu==i,4:5][j,])%*%beta_est)*sum(exp(astar_f[,-j]%*%(as.matrix(data[data$clu==i,4:5])[-j,]%*%beta_est)))
+      
+      ind2 = which(rowSums(astar)==suff_T[i]) # find rows sum=sufficient statistics
+      abar = matrix(astar[ind2,],ncol=n[i]) # only keep those
+      denomi = sum(exp(abar%*%as.matrix(data[data$clu==i,4:5])%*%beta_est))
+      
+      prob = nume/denomi
+      prop_ps = rbind(prop_ps,prob)
+    }
+  }
+  propps = prop_ps[-1,]
+  data$ps_weight = propps
+  effec_suffi = mean(data$A*data$y_obs/data$ps_weight-(1-data$A)*data$y_obs/data$ps_weight)
+  print (dataid)
+  return (effec_suffi=effec_suffi)
+}
+effect_suffi_summ = mclapply(1:dataIndex,func_suffi,simdata=simdata00,m=500,mc.cores = 1)
+save(effect_suffi_summ,file="effect_suffi_res_summary.RData")
